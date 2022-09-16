@@ -20,144 +20,190 @@ const Direction = {
         0
     ]
 };
-var Conclusion;
-(function(Conclusion) {
-    Conclusion[Conclusion["Loose"] = -1] = "Loose";
-    Conclusion[Conclusion["Ongoing"] = 0] = "Ongoing";
-    Conclusion[Conclusion["Win"] = 1] = "Win";
-})(Conclusion || (Conclusion = {}));
+var Status;
+(function(Status) {
+    Status[Status["Loose"] = -1] = "Loose";
+    Status[Status["Ongoing"] = 0] = "Ongoing";
+    Status[Status["Win"] = 1] = "Win";
+})(Status || (Status = {}));
 var Entity;
 (function(Entity) {
-    Entity["Empty"] = "empty";
-    Entity["Snake"] = "snake";
-    Entity["Food"] = "food";
+    Entity[Entity["Empty"] = 0] = "Empty";
+    Entity[Entity["Food"] = 1] = "Food";
+    Entity[Entity["Snake"] = 2] = "Snake";
 })(Entity || (Entity = {}));
 class GameState {
-    #snake;
+    #board;
     #empty;
     #foods;
+    #snake;
     #velocity;
     #status;
-    constructor(n, m){
+    n_foods;
+    constructor(n, m, { n_foods =1  } = {}){
         this.n = n;
         this.m = m;
-        this.#foods = new Set();
+        this.#foods = [];
+        this.#snake = [];
         this.#velocity = Direction.Right;
-        this.#status = Conclusion.Ongoing;
-        this.#empty = new Set(Array.from({
+        this.#status = Status.Ongoing;
+        this.#empty = [];
+        this.#board = Array.from({
             length: n
-        }, (_, row)=>row).flatMap((row)=>Array.from({
+        }, (_, i)=>{
+            return Array.from({
                 length: m
-            }, (_, col)=>[
-                    row,
-                    col
-                ])).map((coordinate)=>coordinate.join()));
-        this.#snake = [
-            [
-                Math.floor(n / 2),
-                Math.floor(m / 2)
-            ]
-        ];
-        this.#empty.delete(this.#snake[0].join());
-        this.#addFoods();
+            }, (_, j)=>{
+                this.#empty.push([
+                    i,
+                    j
+                ]);
+                return [
+                    Entity.Empty,
+                    n * i + j
+                ];
+            });
+        });
+        this.n_foods = n_foods;
     }
     *[Symbol.iterator]() {
-        yield [
-            ...this.#snake.map((coordinate)=>[
-                    coordinate,
-                    Entity.Snake
-                ]),
-            ...[
-                ...this.#foods
-            ].map((key)=>{
-                const coordinate = key.split(",").map((d)=>+d);
-                return [
-                    coordinate,
-                    Entity.Food
-                ];
-            }), 
-        ];
-        while(this.#status === Conclusion.Ongoing){
-            const head = [
-                this.#velocity[0] + this.#snake[0][0],
-                this.#velocity[1] + this.#snake[0][1], 
+        let direction = yield this.#initialize();
+        let [i, j] = this.#snake[0];
+        while(this.#status === Status.Ongoing){
+            const [dI, dJ] = this.#turn(direction);
+            const head = [i, j] = [
+                mod(i + dI, this.n),
+                mod(j + dJ, this.m)
             ];
-            this.#turn((yield this.#update(head)));
+            direction = yield this.#update(head);
         }
+    }
+     #initialize() {
+        const i = Math.floor(this.n / 2);
+        const j = Math.floor(this.m / 2);
+        this.#board[i][j] = [
+            Entity.Snake,
+            NaN
+        ];
+        this.#snake.unshift([
+            i,
+            j
+        ]);
+        return [
+            [
+                Entity.Snake,
+                [
+                    i,
+                    j
+                ]
+            ],
+            ...this.#addFoods()
+        ];
     }
      #turn(direction) {
-        if (!direction) {
-            return;
+        if (direction) {
+            const velocity = Direction[direction];
+            if (velocity[0] === this.#velocity[1] || velocity[1] === this.#velocity[0]) {
+                this.#velocity = velocity;
+            }
         }
-        const velocity = Direction[direction];
-        if (!!velocity[0] !== !!this.#velocity[0] && !!velocity[1] !== !!this.#velocity[1]) {
-            this.#velocity = velocity;
-        }
+        return this.#velocity;
     }
      #update(head) {
-        const key = head.join();
-        if (this.#empty.has(key)) {
-            this.#empty.delete(key);
-            this.#snake.unshift(head);
-            const tail = this.#snake.pop();
-            this.#empty.add(tail.join());
-            return [
-                [
-                    head,
-                    Entity.Snake
-                ],
-                [
-                    tail,
-                    Entity.Empty
-                ], 
-            ];
-        } else if (this.#foods.has(key)) {
-            this.#foods.delete(key);
-            this.#snake.unshift(head);
-            return [
-                [
-                    head,
-                    Entity.Snake
-                ],
-                ...this.#addFoods()
-            ];
-        } else {
-            this.#status = this.#empty.size ? Conclusion.Loose : Conclusion.Win;
-            return [];
+        const [i1, j1] = head;
+        const [entity, index] = this.#board[i1]?.[j1] ?? [
+            Entity.Snake,
+            NaN
+        ];
+        switch(entity){
+            case Entity.Empty:
+                {
+                    this.#board[i1][j1] = [
+                        Entity.Snake,
+                        NaN
+                    ];
+                    this.#snake.unshift(head);
+                    swapRemove(this.#empty, index);
+                    const tail = this.#snake.pop();
+                    const [k, l] = tail;
+                    this.#board[k][l] = [
+                        Entity.Empty,
+                        this.#empty.length
+                    ];
+                    this.#empty.push(tail);
+                    return [
+                        [
+                            Entity.Snake,
+                            head
+                        ],
+                        [
+                            Entity.Empty,
+                            tail
+                        ]
+                    ];
+                }
+            case Entity.Food:
+                this.#board[i1][j1] = [
+                    Entity.Snake,
+                    NaN
+                ];
+                this.#snake.unshift(head);
+                swapRemove(this.#foods, index);
+                return [
+                    [
+                        Entity.Snake,
+                        head
+                    ],
+                    ...this.#addFoods()
+                ];
+            default:
+                this.#status = this.#empty.length ? Status.Loose : Status.Win;
+                return [];
         }
     }
      #addFoods() {
-        const k = 3 - this.#foods.size;
-        return sample(this.#empty, k).map((key)=>{
-            this.#empty.delete(key);
-            this.#foods.add(key);
-            const coordinate = key.split(",").map((d)=>+d);
+        const n = Math.min(this.n_foods - this.#foods.length, this.#empty.length);
+        return Array.from({
+            length: n
+        }, ()=>{
+            const index = randRange(this.#empty.length);
+            const [i, j] = this.#empty[index];
+            this.#board[i][j] = [
+                Entity.Food,
+                this.#foods.length
+            ];
+            this.#foods.push([
+                i,
+                j
+            ]);
+            swapRemove(this.#empty, index);
             return [
-                coordinate,
-                Entity.Food
+                Entity.Food,
+                [
+                    i,
+                    j
+                ]
             ];
         });
     }
     n;
     m;
 }
-function sample(iterable, k) {
-    const reservoir = [];
-    let w = Math.exp(Math.log(Math.random()) / k);
-    let t = k + Math.floor(Math.log(Math.random()) / Math.log(1 - w));
-    for (const element of iterable){
-        if (reservoir.length < k) {
-            reservoir.push(element);
-        } else if (t == 0) {
-            reservoir[Math.floor(Math.random() * k)] = element;
-            w *= Math.exp(Math.log(Math.random()) / k);
-            t = Math.floor(Math.log(Math.random()) / Math.log(1 - w)) + 1;
-        } else {
-            t--;
-        }
-    }
-    return reservoir;
+function mod(n, m) {
+    return (n % m + m) % m;
 }
+function randRange(length) {
+    return Math.floor(Math.random() * length);
+}
+function swapRemove(array, i) {
+    if (i === array.length - 1) {
+        array.length--;
+    } else {
+        array[i] = array.pop();
+    }
+}
+const state = new GameState(50, 100);
+const session = state[Symbol.iterator]();
 const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
 svg.setAttribute("viewBox", `0 0 ${100} ${50}`);
 svg.style.width = "100%";
@@ -193,14 +239,12 @@ addEventListener("keydown", (event)=>{
             break;
     }
 });
-const state = new GameState(50, 100);
-const session = state[Symbol.iterator]();
 const id = setInterval(()=>{
     const { done , value  } = session.next(direction1);
     if (done) {
         clearInterval(id);
     } else {
-        for (const [[row, col], entity] of value){
+        for (const [entity, [row, col]] of value){
             switch(entity){
                 case Entity.Empty:
                     cells[row][col].setAttribute("fill", "black");

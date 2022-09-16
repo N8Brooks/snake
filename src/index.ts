@@ -5,10 +5,14 @@ import { Direction, Entity, GameState } from "../game_state.ts";
 const ROWS = 50;
 const COLS = 100;
 
+const state = new GameState(ROWS, COLS);
+const session = state[Symbol.iterator]();
+
 const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
 svg.setAttribute("viewBox", `0 0 ${COLS} ${ROWS}`);
 svg.style.width = "100%";
 svg.style.height = "100%";
+
 const cells = Array.from(
   { length: ROWS },
   (_, row) =>
@@ -45,15 +49,12 @@ addEventListener("keydown", (event) => {
   }
 });
 
-const state = new GameState(ROWS, COLS);
-const session = state[Symbol.iterator]();
-
 const id = setInterval(() => {
   const { done, value } = session.next(direction);
   if (done) {
     clearInterval(id);
   } else {
-    for (const [[row, col], entity] of value) {
+    for (const [entity, [row, col]] of value) {
       switch (entity) {
         case Entity.Empty:
           cells[row][col].setAttribute("fill", "black");

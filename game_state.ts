@@ -1,3 +1,4 @@
+/** Snake directions */
 export const Direction = {
   Right: [0, 1],
   Up: [-1, 0],
@@ -5,122 +6,153 @@ export const Direction = {
   Down: [1, 0],
 } as const;
 
-const N_FOODS = 3;
-
-export enum Conclusion {
+/** `GameState` overall status */
+export enum Status {
   Loose = -1,
   Ongoing = 0,
   Win = 1,
 }
 
+/** Board elements */
 export enum Entity {
-  Empty = "empty",
-  Snake = "snake",
-  Food = "food",
+  Empty,
+  Food,
+  Snake,
 }
 
+/** Summarizes changes with the new `Entity` at the row and col index */
+export type Update = [Entity, [number, number]];
+
 export class GameState {
-  #snake: [number, number][];
-  #empty: Set<string>;
-  #foods: Set<string> = new Set();
+  /** `Entity` and entity specific collection index pair */
+  #board: [Entity, number][][];
+
+  /** Unordered row and column index pairs of `Empty` entities */
+  #empty: [number, number][];
+
+  /** Unordered row and column index pairs of `Food` entities */
+  #foods: [number, number][] = [];
+
+  /** Queue containing row and column index pairs of `Snake` entities */
+  #snake: [number, number][] = [];
+
+  /** Delta row and column index pair applied every game loop */
   #velocity: typeof Direction[keyof typeof Direction] = Direction.Right;
-  #status = Conclusion.Ongoing;
 
-  constructor(public readonly n: number, public readonly m: number) {
-    this.#empty = new Set(
-      Array.from({ length: n }, (_, row) => row).flatMap((row) =>
-        Array.from({ length: m }, (_, col): [number, number] => [row, col])
-      ).map((coordinate) => coordinate.join()),
-    );
-    this.#snake = [[Math.floor(n / 2), Math.floor(m / 2)]];
-    this.#empty.delete(this.#snake[0].join());
-    this.#addFoods();
+  /** Game status */
+  #status = Status.Ongoing;
+
+  /** Option defining maximum number of `Food` entities in `GameState` */
+  readonly n_foods: number;
+
+  constructor(
+    public readonly n: number,
+    public readonly m: number,
+    { n_foods = 1 } = {},
+  ) {
+    this.#empty = [];
+    this.#board = Array.from({ length: n }, (_, i) => {
+      return Array.from({ length: m }, (_, j) => {
+        this.#empty.push([i, j]);
+        return [Entity.Empty, n * i + j];
+      });
+    });
+    this.n_foods = n_foods;
   }
 
-  *[Symbol.iterator](): Generator<[[number, number], Entity][]> {
-    // Initialize board
-    yield [
-      ...this.#snake.map((coordinate) => [coordinate, Entity.Snake]),
-      ...[...this.#foods].map((key) => {
-        const coordinate = key.split(",").map((d) => +d);
-        return [coordinate, Entity.Food];
-      }),
-    ] as [[number, number], Entity][];
-
-    // Game loop
-    while (this.#status === Conclusion.Ongoing) {
-      const head: [number, number] = [
-        this.#velocity[0] + this.#snake[0][0],
-        this.#velocity[1] + this.#snake[0][1],
-      ];
-      this.#turn(
-        (yield this.#update(head)) as keyof typeof Direction | undefined,
-      );
+  /** Game loop */
+  *[Symbol.iterator](): Generator<
+    Update[],
+    void,
+    keyof typeof Direction | undefined
+  > {
+    let direction = yield this.#initialize();
+    let [i, j] = this.#snake[0];
+    while (this.#status === Status.Ongoing) {
+      const [dI, dJ] = this.#turn(direction);
+      const head = [i, j] = [mod(i + dI, this.n), mod(j + dJ, this.m)];
+      direction = yield this.#update(head);
     }
   }
 
+  /** Add snake */
+  #initialize(): Update[] {
+    const i = Math.floor(this.n / 2);
+    const j = Math.floor(this.m / 2);
+    // `Snake` entity indexes are unnecessary and can change
+    this.#board[i][j] = [Entity.Snake, NaN];
+    this.#snake.unshift([i, j]);
+    return [[Entity.Snake, [i, j]], ...this.#addFoods()];
+  }
+
+  /** Turn horizontal if vertical and vise versa */
   #turn(direction?: keyof typeof Direction) {
-    if (!direction) {
-      return;
+    if (direction) {
+      const velocity = Direction[direction];
+      if (
+        velocity[0] === this.#velocity[1] || velocity[1] === this.#velocity[0]
+      ) {
+        this.#velocity = velocity;
+      }
     }
-    const velocity = Direction[direction];
-    if (
-      !!velocity[0] !== !!this.#velocity[0] &&
-      !!velocity[1] !== !!this.#velocity[1]
-    ) {
-      this.#velocity = velocity;
+    return this.#velocity;
+  }
+
+  /** Transform game state with given row-col index pair, `head` */
+  #update(head: [number, number]): Update[] {
+    const [i, j] = head;
+    const [entity, index] = this.#board[i]?.[j] ?? [Entity.Snake, NaN]; // wall
+    switch (entity) {
+      case Entity.Empty: {
+        this.#board[i][j] = [Entity.Snake, NaN];
+        this.#snake.unshift(head);
+        swapRemove(this.#empty, index);
+        const tail = this.#snake.pop()!;
+        const [k, l] = tail;
+        this.#board[k][l] = [Entity.Empty, this.#empty.length];
+        this.#empty.push(tail);
+        return [[Entity.Snake, head], [Entity.Empty, tail]];
+      }
+      case Entity.Food:
+        this.#board[i][j] = [Entity.Snake, NaN];
+        this.#snake.unshift(head);
+        swapRemove(this.#foods, index);
+        return [[Entity.Snake, head], ...this.#addFoods()];
+      default:
+        this.#status = this.#empty.length ? Status.Loose : Status.Win;
+        return [];
     }
   }
 
-  #update(head: [number, number]): [[number, number], Entity][] {
-    const key = head.join();
-    if (this.#empty.has(key)) {
-      // console.debug("Hit nothing");
-      this.#empty.delete(key);
-      this.#snake.unshift(head);
-      const tail = this.#snake.pop()!;
-      this.#empty.add(tail.join());
-      return [
-        [head, Entity.Snake],
-        [tail, Entity.Empty],
-      ];
-    } else if (this.#foods.has(key)) {
-      // console.debug("Hit food");
-      this.#foods.delete(key);
-      this.#snake.unshift(head);
-      return [[head, Entity.Snake], ...this.#addFoods()];
-    } else {
-      // console.debug("Hit wall or snake");
-      this.#status = this.#empty.size ? Conclusion.Loose : Conclusion.Win;
-      return [];
-    }
-  }
-
-  #addFoods(): [[number, number], Entity][] {
-    const k = N_FOODS - this.#foods.size;
-    return sample(this.#empty, k).map((key) => {
-      this.#empty.delete(key);
-      this.#foods.add(key);
-      const coordinate = key.split(",").map((d) => +d) as [number, number];
-      return [coordinate, Entity.Food];
+  /** Adds up to `n_foods` food entities into the game state */
+  #addFoods(): Update[] {
+    const n = Math.min(this.n_foods - this.#foods.length, this.#empty.length);
+    return Array.from({ length: n }, () => {
+      const index = randRange(this.#empty.length);
+      const [i, j] = this.#empty[index];
+      this.#board[i][j] = [Entity.Food, this.#foods.length];
+      this.#foods.push([i, j]);
+      swapRemove(this.#empty, index);
+      return [Entity.Food, [i, j]];
     });
   }
 }
 
-function sample<T>(iterable: Iterable<T>, k: number) {
-  const reservoir: T[] = [];
-  let w = Math.exp(Math.log(Math.random()) / k);
-  let t = k + Math.floor(Math.log(Math.random()) / Math.log(1 - w));
-  for (const element of iterable) {
-    if (reservoir.length < k) {
-      reservoir.push(element);
-    } else if (t == 0) {
-      reservoir[Math.floor(Math.random() * k)] = element;
-      w *= Math.exp(Math.log(Math.random()) / k);
-      t = Math.floor(Math.log(Math.random()) / Math.log(1 - w)) + 1;
-    } else {
-      t--;
-    }
+/** JavaScript modulo operation */
+function mod(n: number, m: number): number {
+  return ((n % m) + m) % m;
+}
+
+/** Random integer in [`0`, `length`) */
+function randRange(length: number): number {
+  return Math.floor(Math.random() * length);
+}
+
+/** O(1) operation to remove an element *without* preserving order */
+function swapRemove<T>(array: T[], i: number) {
+  if (i === array.length - 1) {
+    array.length--;
+  } else {
+    array[i] = array.pop()!;
   }
-  return reservoir;
 }
